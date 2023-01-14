@@ -95,7 +95,7 @@ def project_vehicle_to_image(vehicle_pose, calibration, points):
                                             camera_image_metadata,
                                             world_points).numpy()
 
-def _process_projected_camera_synced_boxes(camera_image, ax=False, draw_3d_box=True):
+def _process_projected_camera_synced_boxes(camera_image, frame_data, ax=False, draw_3d_box=True):
   """Displays camera_synced_box 3D labels projected onto camera."""
   def draw_3d_wireframe_box(ax, u, v, color, linewidth=3):
     """Draws 3D wireframe bounding boxes onto the given axis."""
@@ -112,22 +112,20 @@ def _process_projected_camera_synced_boxes(camera_image, ax=False, draw_3d_box=T
             color=list(color) + [0.5])  # Add alpha for opacity
         ax.add_line(line)
 
-    
-
   # Fetch matching camera calibration.
-  calibration = next(cc for cc in frame.context.camera_calibrations
+  calibration = next(cc for cc in frame_data.context.camera_calibrations
                      if cc.name == camera_image.name)
 
   list_box3d = []
   list_classids = []
   
-  for label in frame.laser_labels:
+  for label in frame_data.laser_labels:
     box = label.camera_synced_box
 
     if not box.ByteSize():
       continue  # Filter out labels that do not have a camera_synced_box.
     FILTER_AVAILABLE = any(
-        [label.num_top_lidar_points_in_box > 0 for label in frame.laser_labels]
+        [label.num_top_lidar_points_in_box > 0 for label in frame_data.laser_labels]
     )
 
     if (FILTER_AVAILABLE and not label.num_top_lidar_points_in_box) or (
@@ -143,7 +141,7 @@ def _process_projected_camera_synced_boxes(camera_image, ax=False, draw_3d_box=T
         box_coords)[0].numpy()  # [8, 3]
 
     # Project box corners from vehicle coordinates onto the image.
-    projected_corners = project_vehicle_to_image(frame.pose, calibration,
+    projected_corners = project_vehicle_to_image(frame_data.pose, calibration,
                                                  corners)
     u, v, ok = projected_corners.transpose()
     ok = ok.astype(bool)
@@ -177,6 +175,90 @@ def _process_projected_camera_synced_boxes(camera_image, ax=False, draw_3d_box=T
   num_valid_labels = len(list_box3d)
   return np.array(list_box3d).flatten(), np.array(list_classids).flatten(), num_valid_labels
 
+def convert_range_image_to_point_cloud_labels(
+        frame,
+        range_images,
+        segmentation_labels,
+        ri_index=0
+    ):
+    calibrations = sorted(frame.context.laser_calibrations, key=lambda c: c.name)
+    point_labels = []
+
+    for c in calibrations:
+        range_image = range_images[c.name][ri_index]
+        range_image_tensor = tf.reshape(
+            tf.convert_to_tensor(range_image.data), range_image.shape.dims)
+        range_image_mask = range_image_tensor[..., 0] > 0
+
+        if c.name in segmentation_labels:
+            s1 = segmentation_labels[c.name][ri_index]
+            s1_tensor = tf.reshape(tf.convert_to_tensor(s1.data), s1.shape.dims)
+            s1_points_tensor = tf.gather_nd(s1_tensor, tf.where(range_image_mask))
+        else:
+            num_valid_point = tf.math.reduce_sum(tf.cast(range_image_mask, tf.int32))
+            s1_points_tensor = tf.zeros([num_valid_point, 2], tf.int32)
+
+        point_labels.append(s1_points_tensor.numpy())
+    return point_labels
+
+def convert_range_image_to_point_cloud(frame,
+                                       range_images,
+                                       camera_projections,
+                                       range_image_top_pose,
+                                       ri_index=0,
+                                       keep_polar_features=False):
+  """Convert range images to point cloud.
+  FUNCTION is exactly the same as from waymo_open_dataset but ignores points
+  from NLZ
+
+  Args:
+    frame: open dataset frame
+    range_images: A dict of {laser_name, [range_image_first_return,
+      range_image_second_return]}.
+    camera_projections: A dict of {laser_name,
+      [camera_projection_from_first_return,
+      camera_projection_from_second_return]}.
+    range_image_top_pose: range image pixel pose for top lidar.
+    ri_index: 0 for the first return, 1 for the second return.
+    keep_polar_features: If true, keep the features from the polar range image
+      (i.e. range, intensity, and elongation) as the first features in the
+      output range image.
+
+  Returns:
+    points: {[N, 3]} list of 3d lidar points of length 5 (number of lidars).
+      (NOTE: Will be {[N, 6]} if keep_polar_features is true.
+    cp_points: {[N, 6]} list of camera projections of length 5
+      (number of lidars).
+  """
+  calibrations = sorted(frame.context.laser_calibrations, key=lambda c: c.name)
+  points = []
+  cp_points = []
+
+  cartesian_range_images = frame_utils.convert_range_image_to_cartesian(
+      frame, range_images, range_image_top_pose, ri_index, keep_polar_features)
+
+  for c in calibrations:
+    range_image = range_images[c.name][ri_index]
+    range_image_tensor = tf.reshape(
+        tf.convert_to_tensor(value=range_image.data), range_image.shape.dims)
+    range_image_mask = range_image_tensor[..., 0] > 0
+    range_image_NLZ_mask = range_image_tensor[..., -1] > 0 # Ignore NLZ
+    range_image_final_mask = tf.math.logical_and(range_image_mask, range_image_NLZ_mask)
+
+    range_image_cartesian = cartesian_range_images[c.name]
+    points_tensor = tf.gather_nd(range_image_cartesian,
+                                 tf.compat.v1.where(range_image_final_mask))
+
+    cp = camera_projections[c.name][ri_index]
+    cp_tensor = tf.reshape(tf.convert_to_tensor(value=cp.data), cp.shape.dims)
+    cp_points_tensor = tf.gather_nd(cp_tensor,
+                                    tf.compat.v1.where(range_image_final_mask))
+    points.append(points_tensor.numpy())
+    cp_points.append(cp_points_tensor.numpy())
+
+  return points, cp_points
+
+
 def _process_camera_data(frame_data):  
     # plt.figure(figsize=(25, 20))
     final_dict = {}
@@ -191,7 +273,7 @@ def _process_camera_data(frame_data):
         img_height = calibration.height # int
 
         # ax = show_camera_image(cam_img, [3, 3, index + 1])
-        box3d_arr, class_ids_arr, num_valid = _process_projected_camera_synced_boxes(cam_img) # float [N, 16] for boxes (16: xyxy... for 8 points), int [N] for class_ids
+        box3d_arr, class_ids_arr, num_valid = _process_projected_camera_synced_boxes(cam_img, frame_data) # float [N, 16] for boxes (16: xyxy... for 8 points), int [N] for class_ids
         # box3d_arr = padToSize(box3d_arr, 250*8*2) # 8 corners of 3d cube, with corners xyxy
         class_ids_arr = class_ids_arr.astype(int)
 
@@ -235,6 +317,7 @@ def _process_camera_data(frame_data):
                 f'{_cam_name}/labels/segmentation/mapping/is_tracked': _int64_array_feature(map_is_tracked_list.tolist()),
             }
         else:
+            # Added invalid data for feature-key consistency
             cam_segmentation = {
                 f'{_cam_name}/labels/segmentation/is_present': _int64_feature(0),
                 f'{_cam_name}/labels/segmentation/panoptic_label': _bytes_feature(tf.io.serialize_tensor(np.zeros((2, 2, 1)))), # tf.io.decode_png()
@@ -250,12 +333,11 @@ def _process_camera_data(frame_data):
 
     return final_dict
 
-def _process_lidar_labels(frame_data, pad_size=250):
+def _process_lidar_labels(frame_data):
     """Creates lidar label feature dict.
 
     Args:
-        frame_data (_type_): _description_
-        pad_size (int, optional): _description_. Defaults to 250.
+        frame_data (_type_): Parsed frame data
     """
     
     list_box3d = []
@@ -303,68 +385,118 @@ def _process_lidar_labels(frame_data, pad_size=250):
 
     return box_label_feature_dict
 
-def _process_lidar_pointcloud(frame_data, pad_size=250000):
+def _process_lidar_pointcloud(frame_data):
     # Read range images and corresponding projections from waymo dataset
     (range_images, camera_projections, 
-    _, range_image_top_pose) = frame_utils.parse_range_image_and_camera_projection(
+    seg_labels, range_image_top_pose) = frame_utils.parse_range_image_and_camera_projection(
         frame_data)
     # Convert range images to proper cartesian point cloud and combine all lidar sensor data to one
-    cartesian_pc, cp_points = frame_utils.convert_range_image_to_point_cloud(frame_data, range_images, camera_projections, range_image_top_pose, 0, True)
-    cartesian_pc = np.concatenate(cartesian_pc, axis=0) #[:, 3:].flatten()
+    cartesian_pc_rg0, cp_points = convert_range_image_to_point_cloud(frame_data, range_images, camera_projections, range_image_top_pose, 0, True)
+    cartesian_pc_rg0 = np.concatenate(cartesian_pc_rg0, axis=0) # LiDAR return 0
 
-    # --- Flatten and pad data to constant size --- | In pointcloud: 250000
-    point_cloud_xyz = cartesian_pc[:, 3:].flatten()
+    cartesian_pc_rg1, cp_points = convert_range_image_to_point_cloud(frame_data, range_images, camera_projections, range_image_top_pose, 0, True)
+    cartesian_pc_rg1 = np.concatenate(cartesian_pc_rg1, axis=0) # LiDAR return 1
+
+    cartesian_pc = np.concatenate((cartesian_pc_rg0, cartesian_pc_rg1), axis=0) # Combines both the LiDAR returns into one pc
+
+    # --- Flatten --- 
+    point_cloud_xyz = cartesian_pc[:, 3:]
     valid_points = point_cloud_xyz.shape[0]  
-    point_cloud_intensity = cartesian_pc[:, 1].flatten()
-    point_cloud_elongation = cartesian_pc[:, 2].flatten()
+    point_cloud_intensity = cartesian_pc[:, 1].flatten().tolist()
+    point_cloud_elongation = cartesian_pc[:, 2].flatten().tolist()
+    # ---
 
-    # point_cloud_xyz_padded = padToSize(point_cloud_xyz, pad_size * 3)
-    # point_cloud_intensity_padded = padToSize(point_cloud_intensity, pad_size)
-    # point_cloud_elongation_padded = padToSize(point_cloud_elongation, pad_size)
-    
-    point_cloud_xyz_padded = point_cloud_xyz
-    point_cloud_intensity_padded = point_cloud_intensity
-    point_cloud_elongation_padded = point_cloud_elongation
+    # --- Process lidar segmentation data -- (Not guranteed to be present for each frame)
+    is_seg_label_present = 0
+    if seg_labels:
+        is_seg_label_present = 1
+        point_labels_r0 = np.concatenate(convert_range_image_to_point_cloud_labels(frame_data, range_images, seg_labels), axis=0)
+        point_labels_r1 = np.concatenate(convert_range_image_to_point_cloud_labels(frame_data, range_images, seg_labels, 1), axis=0)
+        point_labels = np.concatenate((point_labels_r0, point_labels_r1), axis=0) # instance_id, semantic_class
+        instance_id = point_labels[..., 0].flatten().tolist() # int
+        semantic_class = point_labels[..., 1].flatten().tolist() # int
+    else:
+        instance_id = np.full((2), -1).flatten().tolist()
+        semantic_class = np.full((2), -1).flatten().tolist()
     # ---
 
     # Get extrinsic calibration for TOP LiDAR
-    for laser_calib in frame.context.laser_calibrations:
+    for laser_calib in frame_data.context.laser_calibrations:
         if laser_calib.name == 1:
-            extrinsic_calib = np.array(laser_calib.extrinsic.transform)
+            extrinsic_calib = np.array(laser_calib.extrinsic.transform).tolist()
+            break
 
     pointcloud_feature_dict = {
         'LiDAR/point_cloud/num_valid_points': _int64_feature(valid_points),
-        'LiDAR/point_cloud/xyz': _float_array_feature(point_cloud_xyz_padded.tolist()),
-        'LiDAR/point_cloud/intensity': _float_array_feature(point_cloud_intensity_padded.tolist()),
-        'LiDAR/point_cloud/elongation': _float_array_feature(point_cloud_elongation_padded.tolist()),
-        'LiDAR/calibration': _float_array_feature(extrinsic_calib.tolist())
+        'LiDAR/point_cloud/xyz': _float_array_feature(point_cloud_xyz.flatten().tolist()),
+        'LiDAR/point_cloud/intensity': _float_array_feature(point_cloud_intensity),
+        'LiDAR/point_cloud/elongation': _float_array_feature(point_cloud_elongation),
+        'LiDAR/calibration': _float_array_feature(extrinsic_calib),
+        'LiDAR/labels/segmentation/is_present': _int64_feature(is_seg_label_present),
+        'LiDAR/labels/segmentation/instance_ids': _int64_array_feature(instance_id),
+        'LiDAR/labels/segmentation/semantic_class': _int64_array_feature(semantic_class)
     }
 
     return pointcloud_feature_dict
 
+def _process_nlz(frame_data):
+    # No label zones
+    list_x = []
+    list_y = []
+    list_length = []
+
+    nlz = frame_data.no_label_zones
+    if len(nlz) > 0:
+        for _nlz in nlz:
+            list_x.extend(_nlz.x)
+            list_y.extend(_nlz.y)
+            list_length.append(len(_nlz.x))
+    else:
+        list_x.append(-1.0)
+        list_y.append(-1.0)
+        list_length.append(0)
+
+    nlz_feature = {
+        "NLZ/num_nlz": _int64_array_feature(list_length),
+        "NLZ/x": _float_array_feature(list_x),
+        "NLZ/y": _float_array_feature(list_y)
+    }
+
+    return nlz_feature
+    
 def tfrecord_parser(data):
     # Create a description of the features.
     feature_description = {
+        # ---------- General Frame metadata -------------
         'scene_name': tf.io.FixedLenFeature([1], tf.string),
         'time_of_day': tf.io.FixedLenFeature([1], tf.string),
         'location': tf.io.FixedLenFeature([1], tf.string),
         'weather': tf.io.FixedLenFeature([1], tf.string),
         'vehicle_pose': tf.io.FixedLenFeature([4*4], tf.float32), # 4x4 vehicle pose matrix. Basis for defining LiDAR pointCloud
         'timestamp': tf.io.FixedLenFeature([1], tf.int64),
+
+        # ---------- NLZ (No Label Zones) ------------- # Only to be used for camera data, lidar points from NLZ are already removed
+        'NLZ/num_nlz': tf.io.VarLenFeature(tf.int64),
+        'NLZ/x': tf.io.VarLenFeature(tf.float32),
+        'NLZ/y': tf.io.VarLenFeature(tf.float32),
+
         # ------ LiDAR data ------
         'LiDAR/point_cloud/num_valid_points': tf.io.FixedLenFeature([1], tf.int64),
-        ## -- Constant padded to 250000 points --
         'LiDAR/point_cloud/xyz': tf.io.VarLenFeature(tf.float32), # *3 becoz each point has x, y, z
         'LiDAR/point_cloud/intensity': tf.io.VarLenFeature(tf.float32),
         'LiDAR/point_cloud/elongation': tf.io.VarLenFeature(tf.float32),
         'LiDAR/calibration': tf.io.FixedLenFeature([4*4], tf.float32), # Extrinsic calibration matrix for top lidar
-        ## -- LiDAR Labels data -> Padded to 250 --
+        ## -- LiDAR Labels --
         'LiDAR/labels/num_valid_labels': tf.io.FixedLenFeature([1], tf.int64),
         'LiDAR/labels/num_lidar_points': tf.io.VarLenFeature(tf.int64),
         'LiDAR/labels/difficulty': tf.io.VarLenFeature(tf.int64),
         'LiDAR/labels/box_3d': tf.io.VarLenFeature(tf.float32), # *7 because each box has 7 values: center x, y, z, length, width, height, heading
         'LiDAR/labels/metadata': tf.io.VarLenFeature(tf.float32), # *6 becoz speed x, y, z; acceleration x, y, z
-        'LiDAR/labels/class_ids': tf.io.VarLenFeature(tf.int64)
+        'LiDAR/labels/class_ids': tf.io.VarLenFeature(tf.int64),
+        ## -- LiDAR segmentation --
+        'LiDAR/labels/segmentation/is_present': tf.io.FixedLenFeature([1], tf.int64), # 1 -> present / 0 -> absent
+        'LiDAR/labels/segmentation/instance_ids': tf.io.VarLenFeature(tf.int64), # Reshape to (num_valid_points, 1)
+        'LiDAR/labels/segmentation/semantic_class': tf.io.VarLenFeature(tf.int64), # Reshape to (num_valid_points, 1)
         # ------
     } 
 
@@ -409,51 +541,43 @@ def serialize_sample(frame): #, pc_num_points, point_cloud_data, pc_intensity, p
 
   final_feature = {
     **frame_meta_feature, 
+    **_process_nlz(frame),
     **_process_lidar_pointcloud(frame), 
     **_process_lidar_labels(frame), 
     **_process_camera_data(frame)
   }
-  print(final_feature.keys())
-  print("Done encoding features")
+  # print("Done encoding features")
   # Create a Features message using tf.train.Example.
   example_proto = tf.train.Example(features=tf.train.Features(feature=final_feature))
   return example_proto.SerializeToString()
 
 folder_path = "/mnt/d/datasets/waymo/training/"
-file_path = os.path.join(folder_path, random.choice(os.listdir(folder_path)))
-#file_path = os.path.join(folder_path, "segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord")
+# file_path = os.path.join(folder_path, random.choice(os.listdir(folder_path)))
+file_path = os.path.join(folder_path, "segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord")
 
-tf_record = tf.data.TFRecordDataset(file_path, compression_type="")
-tf_record = tf_record.shuffle(32)
+def process_single_segment(paths):
+    segment_path, destination_path = paths
+    tf_record = tf.data.TFRecordDataset(segment_path, compression_type="")
 
-# cnt = tf_record.reduce(np.int64(0), lambda x, _: x + 1) -> Produces 199
-with tf.io.TFRecordWriter("sample_record.tfrecord") as writer:
-    for index, data in enumerate(tf_record):
-        frame = open_dataset.Frame()
-        frame.ParseFromString(bytearray(data.numpy()))
-        # printp(frame.pose.transform)
-        # exit()
-        # print(dir(frame))
-        # print(frame.context)
-        # printp(frame.context.stats.weather)
-        # printp(frame.timestamp_micros)
-        # printp(frame.context.name)
+    with tf.io.TFRecordWriter(destination_path, tf.io.TFRecordOptions(compression_type="GZIP")) as writer:
+        for index, data in enumerate(tf_record):
+            frame = open_dataset.Frame()
+            frame.ParseFromString(bytearray(data.numpy()))
+            
+            converted_frame = serialize_sample(frame)
+            writer.write(converted_frame)
+            print(f"File: {segment_path}, Processed {index} frame")
 
-        ## Labels
-        # for label in frame.laser_labels:
-        #   label.num_top_lidar_points_in_box
-        # 
-        example = serialize_sample(frame) #, valid_points, point_cloud_xyz_padded, point_cloud_intensity_padded, point_cloud_elongation_padded) # erframe.context.name, frame.context.stats.weather, frame.timestamp_micros)
-        writer.write(example)
-        
-        if index == 2:
-            break
+            if index == 4:
+                break
     
+process_single_segment((file_path, "sample_record.tfrecord"))
 print("Done writing to TFRecord")
 
 # Read dataset
-raw_dataset = tf.data.TFRecordDataset("sample_record.tfrecord")
+raw_dataset = tf.data.TFRecordDataset("sample_record.tfrecord", "GZIP")
 parsed_dataset = raw_dataset.map(tfrecord_parser)
 
 for _parsed_record in parsed_dataset.take(10):
     print(_parsed_record.keys())
+    break
