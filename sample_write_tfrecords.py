@@ -3,6 +3,7 @@ import os
 import math
 import numpy as np
 import itertools
+from multiprocessing import Pool
 
 from waymo_open_dataset.utils import range_image_utils, box_utils, transform_utils, frame_utils
 from waymo_open_dataset.camera.ops import py_camera_model_ops
@@ -249,14 +250,14 @@ def convert_range_image_to_point_cloud(frame,
     points_tensor = tf.gather_nd(range_image_cartesian,
                                  tf.compat.v1.where(range_image_final_mask))
 
-    cp = camera_projections[c.name][ri_index]
-    cp_tensor = tf.reshape(tf.convert_to_tensor(value=cp.data), cp.shape.dims)
-    cp_points_tensor = tf.gather_nd(cp_tensor,
-                                    tf.compat.v1.where(range_image_final_mask))
+    # cp = camera_projections[c.name][ri_index]
+    # cp_tensor = tf.reshape(tf.convert_to_tensor(value=cp.data), cp.shape.dims)
+    # cp_points_tensor = tf.gather_nd(cp_tensor,
+    #                                 tf.compat.v1.where(range_image_final_mask))
     points.append(points_tensor.numpy())
-    cp_points.append(cp_points_tensor.numpy())
+    # cp_points.append(cp_points_tensor.numpy())
 
-  return points, cp_points
+  return points #, cp_points
 
 
 def _process_camera_data(frame_data):  
@@ -272,9 +273,7 @@ def _process_camera_data(frame_data):
         img_width = calibration.width # int
         img_height = calibration.height # int
 
-        # ax = show_camera_image(cam_img, [3, 3, index + 1])
         box3d_arr, class_ids_arr, num_valid = _process_projected_camera_synced_boxes(cam_img, frame_data) # float [N, 16] for boxes (16: xyxy... for 8 points), int [N] for class_ids
-        # box3d_arr = padToSize(box3d_arr, 250*8*2) # 8 corners of 3d cube, with corners xyxy
         class_ids_arr = class_ids_arr.astype(int)
 
         _cam_name = f'Camera/{camera_name}'
@@ -302,7 +301,7 @@ def _process_camera_data(frame_data):
                 map_local_instance_list.append(mapping.local_instance_id) # int
                 map_global_instance_list.append(mapping.global_instance_id) # int
                 map_is_tracked_list.append(mapping.is_tracked) # bool
-            # print(len(map_local_instance_list), len(map_global_instance_list), len(map_is_tracked_list))
+
             map_local_instance_list = np.array(map_local_instance_list).flatten()
             map_global_instance_list = np.array(map_global_instance_list).flatten()
             map_is_tracked_list = np.array(map_is_tracked_list, np.int32).flatten()
@@ -391,10 +390,10 @@ def _process_lidar_pointcloud(frame_data):
     seg_labels, range_image_top_pose) = frame_utils.parse_range_image_and_camera_projection(
         frame_data)
     # Convert range images to proper cartesian point cloud and combine all lidar sensor data to one
-    cartesian_pc_rg0, cp_points = convert_range_image_to_point_cloud(frame_data, range_images, camera_projections, range_image_top_pose, 0, True)
+    cartesian_pc_rg0 = convert_range_image_to_point_cloud(frame_data, range_images, camera_projections, range_image_top_pose, 0, True)
     cartesian_pc_rg0 = np.concatenate(cartesian_pc_rg0, axis=0) # LiDAR return 0
 
-    cartesian_pc_rg1, cp_points = convert_range_image_to_point_cloud(frame_data, range_images, camera_projections, range_image_top_pose, 0, True)
+    cartesian_pc_rg1 = convert_range_image_to_point_cloud(frame_data, range_images, camera_projections, range_image_top_pose, 0, True)
     cartesian_pc_rg1 = np.concatenate(cartesian_pc_rg1, axis=0) # LiDAR return 1
 
     cartesian_pc = np.concatenate((cartesian_pc_rg0, cartesian_pc_rg1), axis=0) # Combines both the LiDAR returns into one pc
@@ -500,6 +499,7 @@ def tfrecord_parser(data):
         # ------
     } 
 
+    # Iteratively adding features for each camera
     for _cam_name in camera_mapping.values():
         _cam_name = f'Camera/{_cam_name}'
         single_camera_feature = {
@@ -520,40 +520,36 @@ def tfrecord_parser(data):
             f'{_cam_name}/labels/segmentation/mapping/is_tracked': tf.io.VarLenFeature(tf.int64),
         }
         feature_description.update(single_camera_feature)
-    # print(feature_description.keys())
+
     return tf.io.parse_single_example(data, feature_description)
 
 
 def serialize_sample(frame): #, pc_num_points, point_cloud_data, pc_intensity, pc_elongation):
-  """
+    """
     Creates a tf.train.Example message ready to be written to a file.
-  """
-  # Create a dictionary mapping the feature name to the tf.train.Example-compatible
-  # data type.
-  frame_meta_feature = {
-    'scene_name': _bytes_feature(frame.context.name.encode('utf-8')),
-    'time_of_day': _bytes_feature(frame.context.stats.time_of_day.encode('utf-8')),
-    'location': _bytes_feature(frame.context.stats.location.encode('utf-8')),
-    'weather': _bytes_feature(frame.context.stats.weather.encode('utf-8')),
-    'vehicle_pose': _float_array_feature(np.array(frame.pose.transform).tolist()),
-    'timestamp': _int64_feature(frame.timestamp_micros),
-  }
+    """
+    # Create a dictionary mapping the feature name to the tf.train.Example-compatible
+    # data type.
+    frame_meta_feature = {
+        'scene_name': _bytes_feature(frame.context.name.encode('utf-8')),
+        'time_of_day': _bytes_feature(frame.context.stats.time_of_day.encode('utf-8')),
+        'location': _bytes_feature(frame.context.stats.location.encode('utf-8')),
+        'weather': _bytes_feature(frame.context.stats.weather.encode('utf-8')),
+        'vehicle_pose': _float_array_feature(np.array(frame.pose.transform).tolist()),
+        'timestamp': _int64_feature(frame.timestamp_micros),
+    }
 
-  final_feature = {
-    **frame_meta_feature, 
-    **_process_nlz(frame),
-    **_process_lidar_pointcloud(frame), 
-    **_process_lidar_labels(frame), 
-    **_process_camera_data(frame)
-  }
-  # print("Done encoding features")
-  # Create a Features message using tf.train.Example.
-  example_proto = tf.train.Example(features=tf.train.Features(feature=final_feature))
-  return example_proto.SerializeToString()
+    # Combining all individual feature dicts into one
+    final_feature = {
+        **frame_meta_feature, 
+        **_process_nlz(frame),
+        **_process_lidar_pointcloud(frame), 
+        **_process_lidar_labels(frame), 
+        **_process_camera_data(frame)
+    }
+    example_proto = tf.train.Example(features=tf.train.Features(feature=final_feature))
+    return example_proto.SerializeToString()
 
-folder_path = "/mnt/d/datasets/waymo/training/"
-# file_path = os.path.join(folder_path, random.choice(os.listdir(folder_path)))
-file_path = os.path.join(folder_path, "segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord")
 
 def process_single_segment(paths):
     segment_path, destination_path = paths
@@ -568,14 +564,28 @@ def process_single_segment(paths):
             writer.write(converted_frame)
             print(f"File: {segment_path}, Processed {index} frame")
 
-            if index == 4:
-                break
-    
-process_single_segment((file_path, "sample_record.tfrecord"))
-print("Done writing to TFRecord")
+            # if index == 4:
+            #     break
 
-# Read dataset
-raw_dataset = tf.data.TFRecordDataset("sample_record.tfrecord", "GZIP")
+tf.config.set_visible_devices([], "GPU")
+source_folder = "/mnt/d/datasets/waymo/"
+destination_folder = "../sample_waymo_write_directory"
+
+for subfolder in ["training", "testing", "validation"]:
+    source_sub_folder = os.path.join(source_folder, subfolder)
+    destination_sub_folder = os.path.join(destination_folder, subfolder)
+    os.makedirs(destination_sub_folder, exist_ok=True)
+    
+    tfrecord_files = os.listdir(source_sub_folder)
+
+    source_tfrecord_files = [os.path.join(source_sub_folder, tfrecord_file) for tfrecord_file in tfrecord_files]
+    destination_tfrecord_files = [os.path.join(destination_sub_folder, tfrecord_file) for tfrecord_file in tfrecord_files]
+
+    with Pool() as pool:
+        pool.map(process_single_segment, zip(source_tfrecord_files, destination_tfrecord_files))
+
+# Test read dataset
+raw_dataset = tf.data.TFRecordDataset("../sample_waymo_write_directory/testing/segment-10149575340910243572_2720_000_2740_000_with_camera_labels.tfrecord", "GZIP")
 parsed_dataset = raw_dataset.map(tfrecord_parser)
 
 for _parsed_record in parsed_dataset.take(10):
