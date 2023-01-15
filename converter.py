@@ -243,7 +243,7 @@ def convert_range_image_to_point_cloud(frame,
     range_image_tensor = tf.reshape(
         tf.convert_to_tensor(value=range_image.data), range_image.shape.dims)
     range_image_mask = range_image_tensor[..., 0] > 0
-    range_image_NLZ_mask = range_image_tensor[..., -1] > 0 # Ignore NLZ
+    range_image_NLZ_mask = range_image_tensor[..., -1] < 1 # Ignore NLZ
     range_image_final_mask = tf.math.logical_and(range_image_mask, range_image_NLZ_mask)
 
     range_image_cartesian = cartesian_range_images[c.name]
@@ -259,9 +259,7 @@ def convert_range_image_to_point_cloud(frame,
 
   return points #, cp_points
 
-
 def _process_camera_data(frame_data):  
-    # plt.figure(figsize=(25, 20))
     final_dict = {}
     for index, cam_img in enumerate(frame_data.images):
         camera_name = camera_mapping[cam_img.name] # str
@@ -366,7 +364,7 @@ def _process_lidar_labels(frame_data):
 
     # --- Flatten and pad data to constant size --- | In labels: 250
     num_valid_labels = len(list_box3d)
-    difficulty = np.array(list_class_ids).flatten()
+    difficulty = np.array(list_difficulty).flatten()
     box3d = np.array(list_box3d).flatten()
     meta = np.array(list_meta).flatten()
     num_lidar_points = np.array(list_num_lidar_points).flatten()
@@ -393,7 +391,7 @@ def _process_lidar_pointcloud(frame_data):
     cartesian_pc_rg0 = convert_range_image_to_point_cloud(frame_data, range_images, camera_projections, range_image_top_pose, 0, True)
     cartesian_pc_rg0 = np.concatenate(cartesian_pc_rg0, axis=0) # LiDAR return 0
 
-    cartesian_pc_rg1 = convert_range_image_to_point_cloud(frame_data, range_images, camera_projections, range_image_top_pose, 0, True)
+    cartesian_pc_rg1 = convert_range_image_to_point_cloud(frame_data, range_images, camera_projections, range_image_top_pose, 1, True)
     cartesian_pc_rg1 = np.concatenate(cartesian_pc_rg1, axis=0) # LiDAR return 1
 
     cartesian_pc = np.concatenate((cartesian_pc_rg0, cartesian_pc_rg1), axis=0) # Combines both the LiDAR returns into one pc
@@ -557,19 +555,21 @@ def process_single_segment(paths):
 
     with tf.io.TFRecordWriter(destination_path, tf.io.TFRecordOptions(compression_type="GZIP")) as writer:
         for index, data in enumerate(tf_record):
-            frame = open_dataset.Frame()
-            frame.ParseFromString(bytearray(data.numpy()))
-            
-            converted_frame = serialize_sample(frame)
-            writer.write(converted_frame)
-            print(f"File: {segment_path}, Processed {index} frame")
+            if index % N_SHARD == 0:
+                frame = open_dataset.Frame()
+                frame.ParseFromString(bytearray(data.numpy()))
+                
+                converted_frame = serialize_sample(frame)
+                writer.write(converted_frame)
+                print(f"File: {segment_path}, Processed {index} frame")
 
-            # if index == 4:
-            #     break
+            if index == 4:
+                break
 
 tf.config.set_visible_devices([], "GPU")
 source_folder = "/mnt/d/datasets/waymo/"
 destination_folder = "../sample_waymo_write_directory"
+N_SHARD = 2 # Save only every nth frame
 
 for subfolder in ["training", "testing", "validation"]:
     source_sub_folder = os.path.join(source_folder, subfolder)
@@ -584,10 +584,14 @@ for subfolder in ["training", "testing", "validation"]:
     with Pool() as pool:
         pool.map(process_single_segment, zip(source_tfrecord_files, destination_tfrecord_files))
 
-# Test read dataset
-raw_dataset = tf.data.TFRecordDataset("../sample_waymo_write_directory/testing/segment-10149575340910243572_2720_000_2740_000_with_camera_labels.tfrecord", "GZIP")
-parsed_dataset = raw_dataset.map(tfrecord_parser)
+# single_file_path = os.path.join(source_folder, "training", "segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord")
+# destin_file_path = "../sample_waymo_write_directory/training/segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord"
+# process_single_segment((single_file_path, destin_file_path))
 
-for _parsed_record in parsed_dataset.take(10):
-    print(_parsed_record.keys())
-    break
+# Test read dataset
+# raw_dataset = tf.data.TFRecordDataset(destin_file_path, "GZIP")
+# parsed_dataset = raw_dataset.map(tfrecord_parser)
+
+# for _parsed_record in parsed_dataset.take(10):
+#     print(_parsed_record.keys())
+#     break
