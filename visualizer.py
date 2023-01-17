@@ -183,6 +183,41 @@ def draw_3d_wireframe_box(ax, boxes, labels, linewidth=3):
                 color=color_mapping[label], linewidth=linewidth
             )
 
+def draw_3d_bboxes(ax, bbox):
+    """Draws 3d bboxes on the pointcloud.
+    Huge part of the function is generously copied from StackOverFlow: https://stackoverflow.com/a/49281004
+
+    Args:
+        ax (_type_): axis subplot
+        bbox (np.array, shape: [num_bboxes, 7]): 3d bboxes
+    """
+    def cuboid_data2(o, size=(1, 1, 1)):
+        X = [[[0, 1, 0], [0, 0, 0], [1, 0, 0], [1, 1, 0]],
+            [[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]],
+            [[1, 0, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1]],
+            [[0, 0, 1], [0, 0, 0], [0, 1, 0], [0, 1, 1]],
+            [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]],
+            [[0, 1, 1], [0, 0, 1], [1, 0, 1], [1, 1, 1]]]
+        X = np.array(X).astype(float)
+        for i in range(3):
+            X[:,:,i] *= size[i]
+        X += np.array(o)
+        return X
+
+    def plotCubeAt2(positions,sizes=None,colors=None, **kwargs):
+        g = []
+        for p,s,c in zip(positions, sizes, colors):
+            g.append(cuboid_data2(p, size=s))
+        return art3d.Poly3DCollection(
+            np.concatenate(g), facecolors=np.repeat(colors, 6), **kwargs
+        )
+
+    bbox[:, :3] -= bbox[:, 3:6] / 2 
+    positions = [(-3, 5, -2), (1, 7, 1)]
+    sizes = [(4,5,3), (3,3,7)]
+    colors = ["r","g"]
+
+    
 def visualize_pointcloud(decoded_lidar_data):
     fig = plt.figure(figsize=(10, 10))
 
@@ -230,10 +265,10 @@ def visualize_pointcloud(decoded_lidar_data):
         ax.set_zlim3d(0, 4)
 
         ax.set_title(title)
-        xlim = ax.get_xlim3d()
-        ylim = ax.get_ylim3d()
-        zlim = ax.get_zlim3d()
-        ax.set_box_aspect((xlim[1]-xlim[0], ylim[1]-ylim[0], zlim[1]-zlim[0]))
+        # xlim = ax.get_xlim3d()
+        # ylim = ax.get_ylim3d()
+        # zlim = ax.get_zlim3d()
+        # ax.set_box_aspect((xlim[1]-xlim[0], ylim[1]-ylim[0], zlim[1]-zlim[0]))
         draw_3d_wireframe_box(ax, box_corners_3d, decoded_lidar_data["classids"].numpy())
         plt.savefig(f"output/vis_pc3d_{title}.png", bbox_inches='tight', pad_inches=0)
 
