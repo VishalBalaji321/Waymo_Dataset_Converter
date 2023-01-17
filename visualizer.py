@@ -28,10 +28,10 @@ camera_mapping = {
 }
 
 color_mapping = {
-    1: 'r', 
-    2: 'g',
-    3: 'y',
-    4: 'b'
+    1: ('red', 'darkred'), 
+    2: ('springgreen', 'mediumseagreen'),
+    3: ('yellow', 'olive'),
+    4: ('skyblue', 'deepskyblue')
 }
 def tfrecord_parser(data):
     # Create a description of the features.
@@ -205,7 +205,11 @@ def draw_3d_bboxes(ax, bbox, classids):
             [0, 1, 5, 4], 
             [4, 5, 6, 7],
             [2, 3, 7, 6],
-            [2, 3, 6, 5]
+            [1, 2, 6, 5],
+            [0, 7, 4, 3],
+            [0, 7, 4, 3], # Draw X face 1 to show heading -> Two faces to prevent mismatch in color alpha
+            [0, 4, 3, 7],
+            [0, 4, 3, 7]   # Draw X face 2 to show heading
         ]
         total_faces = []
         for face_connection in total_box_face_connections:
@@ -217,17 +221,20 @@ def draw_3d_bboxes(ax, bbox, classids):
 
     all_bboxes_face_connected = np.array(all_bboxes_face_connected)
     
-    classid_to_color = [color_mapping[x] for x in classids.numpy()]
+    classid_to_facecolor = [color_mapping[x][0] for x in classids.numpy()]
+    classid_to_edgecolor = [color_mapping[x][1] for x in classids.numpy()]
+
     faces_3d_collection = art3d.Poly3DCollection(
-        all_bboxes_face_connected, facecolors=np.repeat(classid_to_color, 6), edgecolor="k", alpha=0.3
+        all_bboxes_face_connected, facecolors=np.repeat(classid_to_facecolor, 10), edgecolor=np.repeat(classid_to_edgecolor, 10), alpha=0.15
     )
     ax.add_collection3d(faces_3d_collection)
+    
 
     
 def visualize_pointcloud(decoded_lidar_data):
     fig = plt.figure(figsize=(10, 10))
 
-    SKIP_EVERY_N_POINTS = 20
+    SKIP_EVERY_N_POINTS = 5
     x = decoded_lidar_data["pointcloud"][:, 0][::SKIP_EVERY_N_POINTS]
     y = decoded_lidar_data["pointcloud"][:, 1][::SKIP_EVERY_N_POINTS]
     z = decoded_lidar_data["pointcloud"][:, 2][::SKIP_EVERY_N_POINTS]
@@ -253,9 +260,9 @@ def visualize_pointcloud(decoded_lidar_data):
     ax.set_axis_off()
     ax.scatter(x, y, z, s=0.5, c=dist, cmap="viridis", alpha=0.6)
     view_mapping = [
-        # (60, 30, "FRONT_RIGHT"),
-        # (60, 210, "BACK_LEFT"),
-        # (60, 90, "SIDE"),
+        (60, 30, "FRONT_RIGHT"),
+        (60, 210, "BACK_LEFT"),
+        (60, 90, "SIDE"),
         (90, 0, "TOP")
     ]
     # Plot labels
