@@ -183,39 +183,45 @@ def draw_3d_wireframe_box(ax, boxes, labels, linewidth=3):
                 color=color_mapping[label], linewidth=linewidth
             )
 
-def draw_3d_bboxes(ax, bbox):
-    """Draws 3d bboxes on the pointcloud.
-    Huge part of the function is generously copied from StackOverFlow: https://stackoverflow.com/a/49281004
+def draw_3d_bboxes(ax, bbox, classids):
+    """Draws 3d rotated bboxes on the pointcloud.
+    Converts 7DoF bounding box to cuboid's 8 corners.
+    Creates faces (total 6 for each cuboid) for each corner, 
+    and draws these faces. (Simple scatter plot doesnt work,
+    it resulted in squishing/incorrect lines in different views)
 
     Args:
         ax (_type_): axis subplot
         bbox (np.array, shape: [num_bboxes, 7]): 3d bboxes
     """
-    def cuboid_data2(o, size=(1, 1, 1)):
-        X = [[[0, 1, 0], [0, 0, 0], [1, 0, 0], [1, 1, 0]],
-            [[0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]],
-            [[1, 0, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1]],
-            [[0, 0, 1], [0, 0, 0], [0, 1, 0], [0, 1, 1]],
-            [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]],
-            [[0, 1, 1], [0, 0, 1], [1, 0, 1], [1, 1, 1]]]
-        X = np.array(X).astype(float)
-        for i in range(3):
-            X[:,:,i] *= size[i]
-        X += np.array(o)
-        return X
+    bboxes_8corners = get_upright_3d_box_corners(bbox).numpy()
+    print(bboxes_8corners.shape)
 
-    def plotCubeAt2(positions,sizes=None,colors=None, **kwargs):
-        g = []
-        for p,s,c in zip(positions, sizes, colors):
-            g.append(cuboid_data2(p, size=s))
-        return art3d.Poly3DCollection(
-            np.concatenate(g), facecolors=np.repeat(colors, 6), **kwargs
-        )
+    all_bboxes_face_connected = []
+    for bbox in bboxes_8corners:
+        total_box_face_connections = [
+            [0, 4, 7, 3],
+            [0, 1, 2, 3],
+            [0, 1, 5, 4], 
+            [4, 5, 6, 7],
+            [2, 3, 7, 6],
+            [2, 3, 6, 5]
+        ]
+        total_faces = []
+        for face_connection in total_box_face_connections:
+            face_coordinates = []
+            for point_idx in face_connection:
+                face_coordinates.append(bbox[point_idx])
+            total_faces.append(face_coordinates)
+        all_bboxes_face_connected.extend(total_faces)
 
-    bbox[:, :3] -= bbox[:, 3:6] / 2 
-    positions = [(-3, 5, -2), (1, 7, 1)]
-    sizes = [(4,5,3), (3,3,7)]
-    colors = ["r","g"]
+    all_bboxes_face_connected = np.array(all_bboxes_face_connected)
+    
+    classid_to_color = [color_mapping[x] for x in classids.numpy()]
+    faces_3d_collection = art3d.Poly3DCollection(
+        all_bboxes_face_connected, facecolors=np.repeat(classid_to_color, 6), edgecolor="k", alpha=0.3
+    )
+    ax.add_collection3d(faces_3d_collection)
 
     
 def visualize_pointcloud(decoded_lidar_data):
@@ -253,11 +259,11 @@ def visualize_pointcloud(decoded_lidar_data):
         (90, 0, "TOP")
     ]
     # Plot labels
-    box_corners_3d = get_upright_3d_box_corners(decoded_lidar_data["box3d"]).numpy()
+    # box_corners_3d = get_upright_3d_box_corners(decoded_lidar_data["box3d"]).numpy()
     # print(box_corners_3d.shape)
     # for box3d, label_class_id in zip(box_corners_3d, decoded_lidar_data["classids"].numpy()):
     #     ax.add_collection3d(art3d.Poly3DCollection([box3d], edgecolors=color_mapping[label_class_id], facecolors='none', linewidths=1, alpha=0.5))
-    
+    draw_3d_bboxes(ax, decoded_lidar_data["box3d"], decoded_lidar_data["classids"])
     for elev, azim, title in view_mapping:
         ax.view_init(elev=elev, azim=azim)
         ax.set_xlim3d(-20, 20)
@@ -269,7 +275,7 @@ def visualize_pointcloud(decoded_lidar_data):
         # ylim = ax.get_ylim3d()
         # zlim = ax.get_zlim3d()
         # ax.set_box_aspect((xlim[1]-xlim[0], ylim[1]-ylim[0], zlim[1]-zlim[0]))
-        draw_3d_wireframe_box(ax, box_corners_3d, decoded_lidar_data["classids"].numpy())
+        # draw_3d_wireframe_box(ax, box_corners_3d, decoded_lidar_data["classids"].numpy())
         plt.savefig(f"output/vis_pc3d_{title}.png", bbox_inches='tight', pad_inches=0)
 
 def _decode_lidar_data(parsed_frame_data):
