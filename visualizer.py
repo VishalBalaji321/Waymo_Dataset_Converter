@@ -283,7 +283,7 @@ def _decode_lidar_data(parsed_frame_data):
     }
     
 
-TF_RECORD_PATH = "../sample_waymo_write_directory/training/segment-10275144660749673822_5755_561_5775_561_with_camera_labels.tfrecord"
+TF_RECORD_PATH = "../sample_waymo_write_directory/training/segment-10226164909075980558_180_000_200_000_with_camera_labels.tfrecord"
 raw_dataset = tf.data.TFRecordDataset(TF_RECORD_PATH, "GZIP")
 raw_dataset = raw_dataset.shuffle(20)
 parsed_dataset = raw_dataset.map(tfrecord_parser)
