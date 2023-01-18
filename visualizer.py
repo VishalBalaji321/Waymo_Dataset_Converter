@@ -33,6 +33,7 @@ color_mapping = {
     3: ('yellow', 'olive'),
     4: ('skyblue', 'deepskyblue')
 }
+
 def tfrecord_parser(data):
     # Create a description of the features.
     feature_description = {
@@ -158,30 +159,6 @@ def get_upright_3d_box_corners(boxes, name=None):
 
     return corners
 
-def draw_3d_wireframe_box(ax, boxes, labels, linewidth=3):
-    """Draws 3D wireframe bounding boxes onto the given axis."""
-    # List of lines to interconnect. Allows for various forms of connectivity.
-    # Four lines each describe bottom face, top face and vertical connectors.
-    lines = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
-            (0, 4), (1, 5), (2, 6), (3, 7))
-
-    for box3d, label in zip(boxes, labels):    
-        for (point_idx1, point_idx2) in lines:
-            # line = plt.Line2D(
-            #     xdata=(int(u[point_idx1]), int(u[point_idx2])),
-            #     ydata=(int(v[point_idx1]), int(v[point_idx2])),
-            #     linewidth=linewidth,
-            #     color=list(color) + [0.5])  # Add alpha for opacity
-
-            # ax.add_line(line)
-            # print(box3d, point_idx1, point_idx2, box3d[point_idx1, 0])
-            ax.scatter(
-                np.linspace(int(box3d[point_idx1, 0]), int(box3d[point_idx2, 0]), 100),
-                np.linspace(int(box3d[point_idx1, 1]), int(box3d[point_idx2, 1]), 100),
-                np.linspace(int(box3d[point_idx1, 2]), int(box3d[point_idx2, 2]), 100), 
-                s=1,
-                color=color_mapping[label], linewidth=linewidth
-            )
 
 def draw_3d_bboxes(ax, bbox, classids):
     """Draws 3d rotated bboxes on the pointcloud.
@@ -195,22 +172,21 @@ def draw_3d_bboxes(ax, bbox, classids):
         bbox (np.array, shape: [num_bboxes, 7]): 3d bboxes
     """
     bboxes_8corners = get_upright_3d_box_corners(bbox).numpy()
-    print(bboxes_8corners.shape)
 
+    total_box_face_connections = [
+        [0, 4, 7, 3],
+        [0, 1, 2, 3],
+        [0, 1, 5, 4], 
+        [4, 5, 6, 7],
+        [2, 3, 7, 6],
+        [1, 2, 6, 5],
+        [0, 7, 4, 3], # Draw X face 1 to show heading
+        [0, 7, 4, 3], # face 1: Two faces to prevent mismatch in color alpha
+        [0, 4, 3, 7], # Draw X face 2 to show heading
+        [0, 4, 3, 7]  # face 2: Two faces to prevent mismatch in color alpha
+    ]
     all_bboxes_face_connected = []
     for bbox in bboxes_8corners:
-        total_box_face_connections = [
-            [0, 4, 7, 3],
-            [0, 1, 2, 3],
-            [0, 1, 5, 4], 
-            [4, 5, 6, 7],
-            [2, 3, 7, 6],
-            [1, 2, 6, 5],
-            [0, 7, 4, 3],
-            [0, 7, 4, 3], # Draw X face 1 to show heading -> Two faces to prevent mismatch in color alpha
-            [0, 4, 3, 7],
-            [0, 4, 3, 7]   # Draw X face 2 to show heading
-        ]
         total_faces = []
         for face_connection in total_box_face_connections:
             face_coordinates = []
@@ -225,65 +201,71 @@ def draw_3d_bboxes(ax, bbox, classids):
     classid_to_edgecolor = [color_mapping[x][1] for x in classids.numpy()]
 
     faces_3d_collection = art3d.Poly3DCollection(
-        all_bboxes_face_connected, facecolors=np.repeat(classid_to_facecolor, 10), edgecolor=np.repeat(classid_to_edgecolor, 10), alpha=0.15
+        all_bboxes_face_connected, facecolors=np.repeat(classid_to_facecolor, 10), 
+        edgecolor=np.repeat(classid_to_edgecolor, 10), linewidth=0.1, alpha=0.1
     )
     ax.add_collection3d(faces_3d_collection)
-    
 
     
 def visualize_pointcloud(decoded_lidar_data):
-    fig = plt.figure(figsize=(10, 10))
+    fig = plt.figure(figsize=(50, 10))
+    plt.suptitle("Waymo Pointcloud Visualization", fontsize=20)
+    
+    SKIP_EVERY_N_POINTS = 10
+    pc_x = decoded_lidar_data["pointcloud"][:, 0][::SKIP_EVERY_N_POINTS]
+    pc_y = decoded_lidar_data["pointcloud"][:, 1][::SKIP_EVERY_N_POINTS]
+    pc_z = decoded_lidar_data["pointcloud"][:, 2][::SKIP_EVERY_N_POINTS]
 
-    SKIP_EVERY_N_POINTS = 5
-    x = decoded_lidar_data["pointcloud"][:, 0][::SKIP_EVERY_N_POINTS]
-    y = decoded_lidar_data["pointcloud"][:, 1][::SKIP_EVERY_N_POINTS]
-    z = decoded_lidar_data["pointcloud"][:, 2][::SKIP_EVERY_N_POINTS]
-
-    dist = tf.math.sqrt([x**2+y**2+z**2])
+    dist = tf.math.sqrt([pc_x**2 + pc_y**2 + pc_z**2])
     
     # --- 2D plotting ---
-    # ax = fig.add_subplot()
-    # ax.scatter(x, y, s=0.5, c=dist, cmap="viridis", alpha=0.6)
-    # for box, classid in zip(decoded_lidar_data["box3d"].numpy(), decoded_lidar_data["classids"].numpy()):
-    #     width, height = box[3], box[4]
-    #     x = box[0] - width/2
-    #     y = box[1] - height/2
+    ax = fig.add_subplot(1, 5, 1, aspect="equal")
+    ax.scatter(pc_x, pc_y, s=0.5, c=dist, cmap="viridis", alpha=0.6)
+    for box, classid in zip(decoded_lidar_data["box3d"].numpy(), decoded_lidar_data["classids"].numpy()):
+        width, height = box[3], box[4]
+        x = box[0] - width/2
+        y = box[1] - height/2
+        rect = patches.Rectangle(xy=(x, y), width=width, height=height, angle=np.rad2deg(box[6]), rotation_point='center', linewidth=1, edgecolor=color_mapping[classid][0], facecolor='none')
+        ax.add_patch(rect)
 
-    #     rect = patches.Rectangle(xy=(x, y), width=width, height=height, angle=box[6], rotation_point='center', linewidth=1, edgecolor=color_mapping[classid], facecolor='none')
-    #     ax.add_patch(rect)
-    # ax.set_xlim([-65, 65])
-    # ax.set_ylim([-65, 65])
-    # plt.savefig(f"output/vis_pc_bev.png", bbox_inches='tight', pad_inches=0)
+        # Drawing rotated arrows -> calculating arrows end tips
+        arrow_end_x = width/2 * np.cos(box[6])
+        arrow_end_y = width/2 * np.sin(box[6])
+        ax.arrow(box[0], box[1], arrow_end_x, arrow_end_y, head_width=2, head_length=0.6, color=color_mapping[classid][0])
+    ax.set_xlim([-75, 75])
+    ax.set_ylim([-75, 75])
+    ax.set_title("2D BEV", pad=10)
+    ax.patch.set_edgecolor('black')  
+    ax.patch.set_linewidth(1)  
+    # ---
     
-
-    ax = fig.add_subplot(projection="3d") # Axes3D(fig)
-    ax.set_axis_off()
-    ax.scatter(x, y, z, s=0.5, c=dist, cmap="viridis", alpha=0.6)
+    # --- 3D plotting ---
     view_mapping = [
-        (60, 30, "FRONT_RIGHT"),
-        (60, 210, "BACK_LEFT"),
-        (60, 90, "SIDE"),
-        (90, 0, "TOP")
+        (60, 30, "3D FRONT_RIGHT"),
+        (60, 210, "3D BACK_LEFT"),
+        (60, 90, "3D SIDE"),
+        (90, 270, "3D BEV")
     ]
-    # Plot labels
-    # box_corners_3d = get_upright_3d_box_corners(decoded_lidar_data["box3d"]).numpy()
-    # print(box_corners_3d.shape)
-    # for box3d, label_class_id in zip(box_corners_3d, decoded_lidar_data["classids"].numpy()):
-    #     ax.add_collection3d(art3d.Poly3DCollection([box3d], edgecolors=color_mapping[label_class_id], facecolors='none', linewidths=1, alpha=0.5))
-    draw_3d_bboxes(ax, decoded_lidar_data["box3d"], decoded_lidar_data["classids"])
-    for elev, azim, title in view_mapping:
+    
+    for index, (elev, azim, title) in enumerate(view_mapping):
+        ax = fig.add_subplot(1, 5, index + 2, projection="3d") # Axes3D
+        # Plot labels
+        draw_3d_bboxes(ax, decoded_lidar_data["box3d"], decoded_lidar_data["classids"])
+
+        ax.set_axis_off()
+        ax.set_box_aspect([1, 1, 1])
+        ax.set_aspect('equal')
+
+        ax.scatter(pc_x, pc_y, pc_z, s=0.5, c=dist, cmap="viridis", alpha=0.6)
         ax.view_init(elev=elev, azim=azim)
         ax.set_xlim3d(-20, 20)
         ax.set_ylim3d(-20, 20)
-        ax.set_zlim3d(0, 4)
-
-        ax.set_title(title)
-        # xlim = ax.get_xlim3d()
-        # ylim = ax.get_ylim3d()
-        # zlim = ax.get_zlim3d()
-        # ax.set_box_aspect((xlim[1]-xlim[0], ylim[1]-ylim[0], zlim[1]-zlim[0]))
-        # draw_3d_wireframe_box(ax, box_corners_3d, decoded_lidar_data["classids"].numpy())
-        plt.savefig(f"output/vis_pc3d_{title}.png", bbox_inches='tight', pad_inches=0)
+        ax.set_zlim3d(-2, 6)
+        ax.set_title(title, pad=10)
+        ax.patch.set_edgecolor('black')  
+        ax.patch.set_linewidth(1)  
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.savefig(f"output/vis_pc.png", bbox_inches='tight')
 
 def _decode_lidar_data(parsed_frame_data):
     return {
@@ -301,8 +283,9 @@ def _decode_lidar_data(parsed_frame_data):
     }
     
 
-TF_RECORD_PATH = "../sample_waymo_write_directory/training/segment-1051897962568538022_238_170_258_170_with_camera_labels.tfrecord"
+TF_RECORD_PATH = "../sample_waymo_write_directory/training/segment-10275144660749673822_5755_561_5775_561_with_camera_labels.tfrecord"
 raw_dataset = tf.data.TFRecordDataset(TF_RECORD_PATH, "GZIP")
+raw_dataset = raw_dataset.shuffle(20)
 parsed_dataset = raw_dataset.map(tfrecord_parser)
 
 for _parsed_frame in parsed_dataset.take(10):

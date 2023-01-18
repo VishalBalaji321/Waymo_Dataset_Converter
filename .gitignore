@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.tfrecord
 output/**
+vis_debug.ipynb
 # C extensions
 *.so
 
