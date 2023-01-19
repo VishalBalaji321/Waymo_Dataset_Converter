@@ -563,30 +563,30 @@ def process_single_segment(paths):
                 writer.write(converted_frame)
                 print(f"File: {segment_path}, Processed {index} frame")
 
-            if index == 4:
-                break
+            # if index == 4:
+            #     break
 
 tf.config.set_visible_devices([], "GPU")
 source_folder = "/mnt/d/datasets/waymo/"
 destination_folder = "../sample_waymo_write_directory"
 N_SHARD = 2 # Save only every nth frame
 
-for subfolder in ["training", "testing", "validation"]:
-    source_sub_folder = os.path.join(source_folder, subfolder)
-    destination_sub_folder = os.path.join(destination_folder, subfolder)
-    os.makedirs(destination_sub_folder, exist_ok=True)
+# for subfolder in ["training", "testing", "validation"]:
+#     source_sub_folder = os.path.join(source_folder, subfolder)
+#     destination_sub_folder = os.path.join(destination_folder, subfolder)
+#     os.makedirs(destination_sub_folder, exist_ok=True)
     
-    tfrecord_files = os.listdir(source_sub_folder)
+#     tfrecord_files = os.listdir(source_sub_folder)
 
-    source_tfrecord_files = [os.path.join(source_sub_folder, tfrecord_file) for tfrecord_file in tfrecord_files]
-    destination_tfrecord_files = [os.path.join(destination_sub_folder, tfrecord_file) for tfrecord_file in tfrecord_files]
+#     source_tfrecord_files = [os.path.join(source_sub_folder, tfrecord_file) for tfrecord_file in tfrecord_files]
+#     destination_tfrecord_files = [os.path.join(destination_sub_folder, tfrecord_file) for tfrecord_file in tfrecord_files]
 
-    with Pool() as pool:
-        pool.map(process_single_segment, zip(source_tfrecord_files, destination_tfrecord_files))
+#     with Pool() as pool:
+#         pool.map(process_single_segment, zip(source_tfrecord_files, destination_tfrecord_files))
 
-# single_file_path = os.path.join(source_folder, "training", "segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord")
-# destin_file_path = "../sample_waymo_write_directory/training/segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord"
-# process_single_segment((single_file_path, destin_file_path))
+single_file_path = os.path.join(source_folder, "training", "segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord")
+destin_file_path = "../sample_waymo_write_directory/training/segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord"
+process_single_segment((single_file_path, destin_file_path))
 
 # Test read dataset
 # raw_dataset = tf.data.TFRecordDataset(destin_file_path, "GZIP")

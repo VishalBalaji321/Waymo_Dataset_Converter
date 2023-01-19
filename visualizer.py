@@ -207,7 +207,7 @@ def draw_3d_bboxes(ax, bbox, classids):
     ax.add_collection3d(faces_3d_collection)
 
     
-def visualize_pointcloud(decoded_lidar_data):
+def visualize_pointcloud(decoded_lidar_data, filename):
     fig = plt.figure(figsize=(50, 10))
     plt.suptitle("Waymo Pointcloud Visualization", fontsize=20)
     
@@ -265,8 +265,9 @@ def visualize_pointcloud(decoded_lidar_data):
         ax.patch.set_edgecolor('black')  
         ax.patch.set_linewidth(1)  
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig(f"output/vis_pc.png", bbox_inches='tight')
-
+    plt.savefig(filename, bbox_inches='tight')
+    plt.close()
+    
 def _decode_lidar_data(parsed_frame_data):
     return {
         "num_valid_lidar_points": parsed_frame_data['LiDAR/point_cloud/num_valid_points'],
@@ -283,14 +284,25 @@ def _decode_lidar_data(parsed_frame_data):
     }
     
 
-TF_RECORD_PATH = "../sample_waymo_write_directory/training/segment-10226164909075980558_180_000_200_000_with_camera_labels.tfrecord"
+TF_RECORD_PATH = "../sample_waymo_write_directory/training/segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord"
 raw_dataset = tf.data.TFRecordDataset(TF_RECORD_PATH, "GZIP")
-raw_dataset = raw_dataset.shuffle(20)
 parsed_dataset = raw_dataset.map(tfrecord_parser)
 
-for _parsed_frame in parsed_dataset.take(10):
+# ------ For Single Image -----------
+# raw_dataset = raw_dataset.shuffle(20)
+# output_filename = f"output/vis_pc.png"
+# for _parsed_frame in parsed_dataset.take(10):
+#     lidar_data = _decode_lidar_data(_parsed_frame)
+#     visualize_pointcloud(lidar_data, output_filename)
+#     # print(_parsed_frame)
+#     # print(_parsed_frame.keys())
+#     break
+
+output_path = "output/"
+video_folder_path = os.path.join(output_path, TF_RECORD_PATH.split("/")[-1].split(".")[0])
+os.makedirs(video_folder_path, exist_ok=True)
+
+for index, _parsed_frame in enumerate(parsed_dataset):
     lidar_data = _decode_lidar_data(_parsed_frame)
-    visualize_pointcloud(lidar_data)
-    # print(_parsed_frame)
-    # print(_parsed_frame.keys())
-    break
+    visualize_pointcloud(lidar_data, os.path.join(video_folder_path, f"{index}.png"))
+    print(f"Visualizing frame: {index}")
