@@ -584,8 +584,8 @@ N_SHARD = 2 # Save only every nth frame
 #     with Pool() as pool:
 #         pool.map(process_single_segment, zip(source_tfrecord_files, destination_tfrecord_files))
 
-single_file_path = os.path.join(source_folder, "training", "segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord")
-destin_file_path = "../sample_waymo_write_directory/training/segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord"
+single_file_path = os.path.join(source_folder, "training", "segment-10094743350625019937_3420_000_3440_000_with_camera_labels.tfrecord")
+destin_file_path = "../sample_waymo_write_directory/training/segment-10094743350625019937_3420_000_3440_000_with_camera_labels.tfrecord"
 process_single_segment((single_file_path, destin_file_path))
 
 # Test read dataset

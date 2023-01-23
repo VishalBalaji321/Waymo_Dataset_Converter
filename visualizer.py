@@ -208,7 +208,7 @@ def draw_3d_bboxes(ax, bbox, classids):
 
     
 def visualize_pointcloud(decoded_lidar_data, filename):
-    fig = plt.figure(figsize=(50, 10))
+    fig = plt.figure(figsize=(20, 30))
     plt.suptitle("Waymo Pointcloud Visualization", fontsize=20)
     
     SKIP_EVERY_N_POINTS = 10
@@ -219,7 +219,7 @@ def visualize_pointcloud(decoded_lidar_data, filename):
     dist = tf.math.sqrt([pc_x**2 + pc_y**2 + pc_z**2])
     
     # --- 2D plotting ---
-    ax = fig.add_subplot(1, 5, 1, aspect="equal")
+    ax = fig.add_subplot(3, 2, 1, aspect="equal")
     ax.scatter(pc_x, pc_y, s=0.5, c=dist, cmap="viridis", alpha=0.6)
     for box, classid in zip(decoded_lidar_data["box3d"].numpy(), decoded_lidar_data["classids"].numpy()):
         width, height = box[3], box[4]
@@ -234,7 +234,7 @@ def visualize_pointcloud(decoded_lidar_data, filename):
         ax.arrow(box[0], box[1], arrow_end_x, arrow_end_y, head_width=2, head_length=0.6, color=color_mapping[classid][0])
     ax.set_xlim([-75, 75])
     ax.set_ylim([-75, 75])
-    ax.set_title("2D BEV", pad=10)
+    ax.set_title("2D BEV")
     ax.patch.set_edgecolor('black')  
     ax.patch.set_linewidth(1)  
     # ---
@@ -248,7 +248,7 @@ def visualize_pointcloud(decoded_lidar_data, filename):
     ]
     
     for index, (elev, azim, title) in enumerate(view_mapping):
-        ax = fig.add_subplot(1, 5, index + 2, projection="3d") # Axes3D
+        ax = fig.add_subplot(3, 2, index + 2, projection="3d") # Axes3D
         # Plot labels
         draw_3d_bboxes(ax, decoded_lidar_data["box3d"], decoded_lidar_data["classids"])
 
@@ -261,7 +261,7 @@ def visualize_pointcloud(decoded_lidar_data, filename):
         ax.set_xlim3d(-20, 20)
         ax.set_ylim3d(-20, 20)
         ax.set_zlim3d(-2, 6)
-        ax.set_title(title, pad=10)
+        ax.set_title(title)
         ax.patch.set_edgecolor('black')  
         ax.patch.set_linewidth(1)  
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -284,7 +284,7 @@ def _decode_lidar_data(parsed_frame_data):
     }
     
 
-TF_RECORD_PATH = "../sample_waymo_write_directory/training/segment-10017090168044687777_6380_000_6400_000_with_camera_labels.tfrecord"
+TF_RECORD_PATH = "../sample_waymo_write_directory/training/segment-10094743350625019937_3420_000_3440_000_with_camera_labels.tfrecord"
 raw_dataset = tf.data.TFRecordDataset(TF_RECORD_PATH, "GZIP")
 parsed_dataset = raw_dataset.map(tfrecord_parser)
 
@@ -298,6 +298,7 @@ parsed_dataset = raw_dataset.map(tfrecord_parser)
 #     # print(_parsed_frame.keys())
 #     break
 
+# ------- For Video -----------------
 output_path = "output/"
 video_folder_path = os.path.join(output_path, TF_RECORD_PATH.split("/")[-1].split(".")[0])
 os.makedirs(video_folder_path, exist_ok=True)
@@ -306,3 +307,10 @@ for index, _parsed_frame in enumerate(parsed_dataset):
     lidar_data = _decode_lidar_data(_parsed_frame)
     visualize_pointcloud(lidar_data, os.path.join(video_folder_path, f"{index}.png"))
     print(f"Visualizing frame: {index}")
+
+ffmpeg_command = f"ffmpeg -r 5 -i {video_folder_path}/%d.png -c:v hevc_nvenc -pix_fmt yuv420p output/{TF_RECORD_PATH.split('/')[-1].split('.')[0]}.mp4"
+os.system(ffmpeg_command)
+
+# Delete all invididual frames
+remove_imgs_command = f"rm -r {video_folder_path}/"
+os.system(remove_imgs_command)
